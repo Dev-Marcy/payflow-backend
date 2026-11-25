@@ -289,7 +289,10 @@ if (keeper && runKeeperPass) {
     }
   };
   adminHooks.keeperBackoff = () => keeper.backoffList();
-  adminHooks.keeperHistory = () => keeper.passHistory();
+  adminHooks.keeperHistory = () => ({
+    passes: keeper.passHistory(),
+    lastSuccessfulRunAt: keeper.lastSuccessfulRunAt,
+  });
 }
 
 let http: Server | undefined;
@@ -305,6 +308,7 @@ if (runApi) {
       tokens: rt.tokens,
       webhooks: rt.dispatcher,
       auth: rt.auth,
+      keeper: keeper ? keeper : undefined,
     })),
     config,
     adminHooks,

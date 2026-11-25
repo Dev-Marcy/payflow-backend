@@ -169,6 +169,11 @@ export interface NetworkRuntime {
   /** Token metadata source; without one the network's native asset still
    * resolves and every other token reports unavailable (never the network). */
   tokens?: TokenMetadataService | undefined;
+  /**
+   * Keeper staleness: set when this process runs the keeper so `/health`
+   * can report when the last pass completed (#258).
+   */
+  keeper?: { lastSuccessfulRunAt: number | null } | undefined;
 }
 
 function healthOf(runtime: NetworkRuntime): HealthResponse {
@@ -208,6 +213,9 @@ function healthOf(runtime: NetworkRuntime): HealthResponse {
       vault: runtime.config.vaultId,
       subscription: runtime.config.subscriptionId,
     },
+    keeper: runtime.keeper
+      ? { lastSuccessfulRunAt: runtime.keeper.lastSuccessfulRunAt }
+      : null,
   };
 }
 
@@ -641,7 +649,8 @@ export function createApp(
 
   if (config.KEEPER_ENABLED && admin?.keeperHistory) {
     app.get([`${API_V1}/keeper`, `${API_ALIAS}/keeper`], (_req, res) => {
-      res.json({ passes: admin.keeperHistory?.() ?? [] });
+      const history = admin.keeperHistory?.() ?? { passes: [], lastSuccessfulRunAt: null };
+      res.json(history);
     });
   }
 

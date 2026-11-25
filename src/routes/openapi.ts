@@ -2756,8 +2756,15 @@ function componentSchemas(): Record<string, SchemaObject> {
       type: "object",
       properties: {
         passes: { type: "array", items: { $ref: "#/components/schemas/KeeperPass" } },
+        lastSuccessfulRunAt: {
+          type: ["integer", "null"],
+          description:
+            "Unix timestamp (seconds) when the keeper last completed a pass without throwing. " +
+            "Null until the first successful pass or when the keeper is not running. " +
+            "A watchdog can alert when this is null or further in the past than the configured interval (#258).",
+        },
       },
-      required: ["passes"],
+      required: ["passes", "lastSuccessfulRunAt"],
     },
     Health: {
       type: "object",
@@ -2803,6 +2810,21 @@ function componentSchemas(): Record<string, SchemaObject> {
           type: "object",
           description: "The state of every network, when the instance serves more than one.",
           additionalProperties: { $ref: "#/components/schemas/Health" },
+        },
+        keeper: {
+          type: ["object", "null"],
+          description:
+            "Keeper staleness information. Present when the keeper is running in this process; " +
+            "null when the keeper is disabled or not attached (#258).",
+          properties: {
+            lastSuccessfulRunAt: {
+              type: ["integer", "null"],
+              description:
+                "Unix timestamp (seconds) when the keeper last completed a pass without throwing. " +
+                "Null until the first successful pass.",
+            },
+          },
+          required: ["lastSuccessfulRunAt"],
         },
       },
       required: ["status", "network", "contracts"],

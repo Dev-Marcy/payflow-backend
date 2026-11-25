@@ -329,6 +329,13 @@ export interface KeeperPassSummary {
 
 export interface KeeperHistoryResponse {
   passes: KeeperPassSummary[];
+  /**
+   * Unix timestamp (seconds) when the keeper last completed a pass without
+   * throwing. Null until the first successful pass, or when the keeper is
+   * not running. A watchdog can alert when this is null or too far in the
+   * past relative to `KEEPER_INTERVAL_MS` (#258).
+   */
+  lastSuccessfulRunAt: number | null;
 }
 
 export interface DuePage {
@@ -675,6 +682,17 @@ export interface HealthResponse {
     vault: string;
     subscription: string;
   };
+  /**
+   * Keeper staleness information. Present when the keeper is running in this
+   * process; null when the keeper is disabled or not attached (#258).
+   */
+  keeper?: {
+    /**
+     * Unix timestamp (seconds) when the keeper last completed a pass without
+     * throwing. Null until the first successful pass.
+     */
+    lastSuccessfulRunAt: number | null;
+  } | null;
   networks?: Record<string, HealthResponse>;
 }
 

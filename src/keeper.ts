@@ -491,6 +491,14 @@ export class Keeper {
   private batchEntryMissing = false;
   private readonly passes: KeeperPassSummary[] = [];
   /**
+   * Unix timestamp (seconds) when the keeper last completed a pass without
+   * throwing — i.e. the settlement loop finished, regardless of whether any
+   * mandates were actually settled. Null until the first successful pass.
+   * Exposed via `passHistory()` and `/health` so a watchdog can alert when
+   * the keeper has been silent for too long (#258).
+   */
+  lastSuccessfulRunAt: number | null = null;
+  /**
    * Names this keeper instance in `keeper_claims`: host, PID and a random
    * suffix, so two keepers on one host (or a restarted one) never mistake
    * each other's claims for their own. Never derived from a secret.
@@ -1007,6 +1015,7 @@ export class Keeper {
       );
     }
     await pruneClaims(this.db, now);
+    this.lastSuccessfulRunAt = now;
     metrics.increment("keeper_passes");
     for (const result of results) {
       if (result.status === "settled") metrics.increment("charges_settled");
