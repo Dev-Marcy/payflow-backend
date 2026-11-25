@@ -25,6 +25,7 @@ import type { RpcStatus } from "./lib/stellar.ts";
 import type { WebhookDispatcher } from "./lib/webhooks.ts";
 import type { Sep10Auth } from "./routes/auth.ts";
 import { logger } from "./lib/logger.ts";
+import { queryOnly, rejectReadBody } from "./routes/validate.ts";
 import { metrics, publishBusinessMetrics, publishIndexerMetrics } from "./lib/metrics.ts";
 import { withSpan } from "./lib/telemetry.ts";
 import { getVersionInfo } from "./lib/version.ts";
@@ -74,9 +75,9 @@ export function loggableError(err: unknown): Error {
  *
  * Express 5 awaits a handler's return value and forwards a rejected promise to
  * the error middleware, so an `async` route no longer needs a manual
- * `try`/`catch` to avoid a dangling request or an unhandled rejection: any
- * failure — thrown synchronously or from a rejected promise — lands here and
- * becomes a 500.
+ * `try`/`catch` to avoid a dangling request or an unhandled rejection.
+ * Malformed/oversized request bodies become safe 400s; other unexpected
+ * failures become a 500.
  *
  * Neither half of the contract leaks: the body is a fixed shape because
  * `err.message` can carry a bound SQL value or an RPC URL, and the log line is
@@ -95,7 +96,24 @@ export function errorHandler(
     next(err);
     return;
   }
-  logger.error({ err: loggableError(err) }, "unhandled request error");
+  const type = (err as Error & { type?: unknown }).type;
+  const parserError =
+    type === "entity.parse.failed" ||
+    type === "entity.too.large" ||
+    type === "request.size.invalid" ||
+    type === "request.aborted";
+  logger.error(
+    {
+      err: parserError
+        ? new Error(type === "entity.parse.failed" ? "invalid JSON request body" : "invalid request body")
+        : loggableError(err),
+    },
+    "unhandled request error",
+  );
+  if (parserError) {
+    sendApiError(res, _req, 400, "invalid_request");
+    return;
+  }
   // Fixed copy from the code's default message: `err.message` can carry a bound
   // SQL value or an RPC URL, so it never reaches the response body.
   sendApiError(res, _req, 500, "internal_error");
@@ -381,6 +399,7 @@ export function createApp(
   });
 
   app.use(express.json({ limit: "64kb" }));
+  app.use(rejectReadBody);
 
   // Count every completed request and record its latency. The finish event
   // fires once the response is sent, so the status code and route are final.
@@ -402,7 +421,7 @@ export function createApp(
     next();
   });
 
-  app.get(["/health", "/ready"], (_req, res, next) => {
+  app.get(["/health", "/ready"], queryOnly(), (_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     next();
   });
@@ -428,7 +447,7 @@ export function createApp(
   const openApiDocument = buildOpenApiDocument({
     networks: runtimes.map((rt) => rt.config.name),
   });
-  app.get([`${API_V1}/openapi.json`, `${API_ALIAS}/openapi.json`], (_req, res) => {
+  app.get([`${API_V1}/openapi.json`, `${API_ALIAS}/openapi.json`], queryOnly(), (_req, res) => {
     res.setHeader("Cache-Control", "public, max-age=60");
     res.json(openApiDocument);
   });
@@ -436,15 +455,15 @@ export function createApp(
   // A readable rendering of the document above. The page, the bootstrap and
   // ReDoc's bundle are all served here: no request leaves this host, so the
   // documentation works offline and without opening the CSP to a CDN.
-  app.get("/api/docs", (_req, res) => {
+  app.get("/api/docs", queryOnly(), (_req, res) => {
     res.setHeader("Cache-Control", "public, max-age=300");
     res.type("html").send(DOCS_HTML);
   });
-  app.get("/api/docs/docs.js", (_req, res) => {
+  app.get("/api/docs/docs.js", queryOnly(), (_req, res) => {
     res.setHeader("Cache-Control", "public, max-age=300");
     res.type("text/javascript").send(DOCS_INIT_SCRIPT);
   });
-  app.get("/api/docs/redoc.standalone.js", (_req, res) => {
+  app.get("/api/docs/redoc.standalone.js", queryOnly(), (_req, res) => {
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.type("text/javascript").send(REDOC_BUNDLE);
   });
@@ -452,7 +471,7 @@ export function createApp(
   // Prometheus metrics. Opt-in: without METRICS_ENABLED the path does not
   // exist and answers 404 like any other unknown route.
   if (config.METRICS_ENABLED) {
-    app.get("/metrics", async (_req, res) => {
+    app.get("/metrics", queryOnly(), async (_req, res) => {
       // The gauges describe the projection as it stands, not as it stood
       // after the last pass, so they are refreshed before the render. The
       // business gauges are re-read the same way — one short indexed query
@@ -470,7 +489,7 @@ export function createApp(
 
   // Always 200 so a slow backfill does not get the service restarted; the
   // body says whether the projection is current.
-  app.get("/health", (_req, res) => {
+  app.get("/health", queryOnly(), (_req, res) => {
     const defaultHealth = healthOf(defaultRuntime);
     const body: HealthResponse = {
       ...defaultHealth,
@@ -490,7 +509,7 @@ export function createApp(
   // to an instance that is still backfilling. An unknown lag (no indexer has
   // run yet, or none is attached) is treated as not ready, since the
   // freshness of the projection cannot be established.
-  app.get("/ready", (_req, res) => {
+  app.get("/ready", queryOnly(), (_req, res) => {
     const lag = lagOf(defaultRuntime.indexer);
     const ready = lag !== null && lag <= MAX_LAG;
     res.status(ready ? 200 : 503).json({
@@ -507,7 +526,7 @@ export function createApp(
    * is running), `lag` (their difference) and `in_sync` (lag ≤ MAX_LAG).
    * Always 200: the response body carries the status.
    */
-  app.get("/sync", (_req, res) => {
+  app.get("/sync", queryOnly(), (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const indexer = defaultRuntime.indexer;
     const indexer_ledger = indexer?.cursor ?? 0;
@@ -527,7 +546,7 @@ export function createApp(
   });
 
   // Version and build information endpoint.
-  app.get("/version", (_req, res) => {
+  app.get("/version", queryOnly(), (_req, res) => {
     res.json({
       ...getVersionInfo(),
       network: config.STELLAR_NETWORK,
@@ -553,7 +572,7 @@ export function createApp(
   }
 
   if (config.KEEPER_ENABLED && admin?.keeperHistory) {
-    app.get([`${API_V1}/keeper`, `${API_ALIAS}/keeper`], (_req, res) => {
+    app.get([`${API_V1}/keeper`, `${API_ALIAS}/keeper`], queryOnly(), (_req, res) => {
       res.json({ passes: admin.keeperHistory?.() ?? [] });
     });
   }

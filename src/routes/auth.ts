@@ -6,7 +6,7 @@ import type { Config, NetworkConfig } from "../config.ts";
 import type { RpcLike } from "../lib/stellar.ts";
 import type { AuthChallengeResponse, AuthTokenResponse } from "./types.ts";
 import { sendApiError } from "./errors.ts";
-import { validate, type Validated } from "./validate.ts";
+import { queryOnly, validate, type Validated } from "./validate.ts";
 
 /**
  * SEP-10 sign-in (https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md).
@@ -284,7 +284,7 @@ export function sessionOf(req: Request, res: Response, auth: Sep10Auth | undefin
   const header = req.headers.authorization;
   if (header === undefined) return { ok: true, value: null };
   const token = /^Bearer\s+(\S+)$/i.exec(header)?.[1];
-  const account = token !== undefined && auth ? auth.verify(token) : null;
+  const account = token !== undefined && token.length <= 4_096 && auth ? auth.verify(token) : null;
   if (account === null) {
     sendApiError(
       res,
@@ -298,15 +298,27 @@ export function sessionOf(req: Request, res: Response, auth: Sep10Auth | undefin
   return { ok: true, value: account };
 }
 
+const authDomainSchema = z
+  .string()
+  .max(64)
+  .regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$/i)
+  .refine((value) => {
+    const port = value.split(":").at(-1);
+    return port === undefined || !/^\d+$/.test(port) || (Number(port) > 0 && Number(port) <= 65_535);
+  });
+
 const challengeQuerySchema = z.object({
   account: z
     .string()
     .refine((value) => StrKey.isValidEd25519PublicKey(value), "must be a Stellar account (G...)"),
-  memo: z.string().optional(),
-  home_domain: z.string().optional(),
-});
+  memo: z.string().max(256).optional(),
+  home_domain: authDomainSchema.optional(),
+  // SEP-10 permits clients to send this; the server does not use it to
+  // authenticate the account.
+  client_domain: authDomainSchema.optional(),
+}).strict();
 
-const tokenBodySchema = z.object({ transaction: z.string().min(1) });
+const tokenBodySchema = z.object({ transaction: z.string().min(1).max(16_384) }).strict();
 
 /**
  * `GET /api/auth`: a SEP-10 challenge. `POST /api/auth`: a JWT for a signed
@@ -322,7 +334,7 @@ export function authRouter(auth: Sep10Auth): Router {
     next();
   });
 
-  r.get("/auth", (req, res) => {
+  r.get("/auth", queryOnly("account", "memo", "home_domain", "client_domain"), (req, res) => {
     const parsed = validate(req, res, "query", challengeQuerySchema, req.query);
     if (!parsed.ok) return;
     const { account, memo, home_domain: homeDomain } = parsed.value;
@@ -344,7 +356,11 @@ export function authRouter(auth: Sep10Auth): Router {
     res.json(body);
   });
 
-  r.post("/auth", express.urlencoded({ extended: false, limit: "64kb" }), async (req, res) => {
+  r.post(
+    "/auth",
+    queryOnly(),
+    express.urlencoded({ extended: false, limit: "64kb" }),
+    async (req, res) => {
     const parsed = validate(req, res, "body", tokenBodySchema, req.body);
     if (!parsed.ok) return;
     let body: AuthTokenResponse;
@@ -358,7 +374,8 @@ export function authRouter(auth: Sep10Auth): Router {
       return;
     }
     res.json(body);
-  });
+    },
+  );
 
   return r;
 }

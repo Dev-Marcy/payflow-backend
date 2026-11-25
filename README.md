@@ -17,6 +17,7 @@
 > **Docs:** https://mmm-pay.github.io/payflow-docs/ ·
 > **Architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
 > **Runbook:** [docs/RUNBOOK.md](docs/RUNBOOK.md) ·
+> **Keeper operations:** [docs/KEEPER_RUNBOOK.md](docs/KEEPER_RUNBOOK.md) ·
 > **Threat model:** [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) ·
 > **API conventions:** [docs/API_CONVENTIONS.md](docs/API_CONVENTIONS.md) ·
 > **API changelog:** [API_CHANGELOG.md](API_CHANGELOG.md)
