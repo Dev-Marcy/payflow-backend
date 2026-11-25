@@ -4,6 +4,7 @@ import type { Config, NetworkConfig } from "./config.ts";
 import type { Storage } from "./lib/store/types.ts";
 import { asStorage } from "./lib/store/index.ts";
 import { openDatabase } from "./lib/db.ts";
+import { pruneOldEvents } from "./lib/db.ts";
 import { updateActivePlanSubscriber, type ActivePlanSubscriber } from "./lib/plan-subscribers.ts";
 
 export type IndexerConfig = Config | NetworkConfig;
@@ -153,6 +154,19 @@ export interface IndexerStatus {
    * is silently missing on-chain state.
    */
   corrections?: number;
+  /**
+   * How many days raw events are kept before they are pruned. Zero means
+   * events are kept indefinitely. Set by the operator via
+   * `RAW_EVENT_RETENTION_DAYS` (or `DATA_RETENTION_DAYS` as a fallback).
+   * Surfaced on `/health` so a monitoring dashboard can confirm the policy
+   * is what the operator intended. Undefined until the first tick.
+   */
+  rawEventRetentionDays?: number | undefined;
+  /**
+   * Wall-clock timestamp (unix seconds) when the last automatic prune of the
+   * `events` table completed. Null until the first prune pass has run.
+   */
+  lastPrunedAt?: number | null;
 }
 
 export class Indexer {
@@ -173,6 +187,8 @@ export class Indexer {
     paused: false,
     eventsLedger: 0,
     eventsLag: 0,
+    rawEventRetentionDays: undefined,
+    lastPrunedAt: null,
   };
   /** Events since process start that failed spec validation. */
   get mismatchedEvents(): number {
@@ -204,6 +220,47 @@ export class Indexer {
   /** Let passes run again after {@link pause}. */
   resume(): void {
     this.status.paused = false;
+  }
+
+  /**
+   * Effective raw-event retention in days. Reads from
+   * `NetworkConfig.rawEventRetentionDays` when set by `networkConfigs()`
+   * (the production path). Falls back to the env `Config` fields when this
+   * indexer was constructed directly with a full `Config`. Returns `undefined`
+   * when neither is set (e.g. a bare `NetworkConfig` in a unit test), which
+   * means pruning is skipped — retention must be explicitly opt-in.
+   */
+  private get rawEventRetentionDays(): number | undefined {
+    // NetworkConfig carries the resolved value (set by networkConfigs()).
+    if ("rawEventRetentionDays" in this.config && this.config.rawEventRetentionDays !== undefined) {
+      return this.config.rawEventRetentionDays;
+    }
+    // Env Config path (direct test instantiation with a plain Config object).
+    if ("RAW_EVENT_RETENTION_DAYS" in this.config) {
+      return this.config.RAW_EVENT_RETENTION_DAYS ?? this.config.DATA_RETENTION_DAYS;
+    }
+    // Bare NetworkConfig with no retention field: skip pruning.
+    return undefined;
+  }
+
+  /**
+   * Prune raw events older than the configured retention window. Called at
+   * the end of each `tick()` so old events are removed without a separate
+   * cron job. Only prunes when retention is configured (> 0); a 0 value
+   * keeps events indefinitely. Passes the projection cursor as `maxLedger`
+   * so events not yet projected are never pruned (#246). Logs and continues
+   * on failure so the indexer loop is never brought down by a prune error.
+   */
+  private async pruneRawEvents(): Promise<void> {
+    const days = this.rawEventRetentionDays;
+    this.status.rawEventRetentionDays = days ?? 0;
+    if (days === undefined || days === 0) return;
+    try {
+      await pruneOldEvents(this.db, days, { maxLedger: this.status.cursor });
+      this.status.lastPrunedAt = Math.floor(Date.now() / 1000);
+    } catch (err) {
+      logger.warn({ err, days }, "raw event prune failed; will retry on next pass");
+    }
   }
 
   constructor(
@@ -649,6 +706,9 @@ export class Indexer {
     // Windows applied before a failed fetch are real progress, so they count.
     this.reportProgress(start, startedAt, cursor, latest, applied, mismatched);
     await this.publishMetrics(applied);
+    // Prune raw events older than the retention window. Runs after every pass
+    // so the table never grows unboundedly; logs-and-continues on failure.
+    await this.pruneRawEvents();
     if (failure !== undefined) throw failure;
     return { applied, mismatched, cursor, latest };
   }

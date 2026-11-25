@@ -316,13 +316,17 @@ const schema = z.object({
 
   /**
    * Days to retain raw contract events before pruning. Events older than this
-   * are removed by the prune operation. Set to 0 to keep all events indefinitely.
-   * @deprecated Use RAW_EVENT_RETENTION_DAYS for per-table control.
+   * are removed by the prune operation and by each periodic indexer pass.
+   * Set to 0 to keep all events indefinitely.
+   * Superseded by `RAW_EVENT_RETENTION_DAYS` when that is set.
    */
   DATA_RETENTION_DAYS: z.coerce.number().int().nonnegative().default(30),
   /**
    * Days to retain raw contract events (`events` table). Overrides
-   * `DATA_RETENTION_DAYS` when set. Set to 0 to keep events indefinitely.
+   * `DATA_RETENTION_DAYS` when set. The indexer prunes events older than
+   * this window on each pass, coordinated with the projection cursor so
+   * pruning never removes events that have not yet been projected.
+   * Set to 0 to keep events indefinitely.
    */
   RAW_EVENT_RETENTION_DAYS: z.coerce.number().int().nonnegative().optional(),
   /**
@@ -507,6 +511,13 @@ export interface NetworkConfig {
   batchSize?: number | undefined;
   /** How often the indexer loop runs a pass, in milliseconds (#241). */
   indexerIntervalMs?: number | undefined;
+  /**
+   * Days raw contract events are kept before pruning (#246). Populated from
+   * `RAW_EVENT_RETENTION_DAYS` (or `DATA_RETENTION_DAYS`); 0 keeps events
+   * indefinitely. The indexer enforces it on each pass, never pruning
+   * events the projection has not consumed yet.
+   */
+  rawEventRetentionDays?: number | undefined;
 }
 
 /**
@@ -638,6 +649,7 @@ export function networkConfigs(config: Config, env: NodeJS.ProcessEnv = process.
     // A network may pace its own passes; otherwise it follows the defaults.
     batchSize: network.batchSize ?? config.INDEXER_BATCH_SIZE,
     indexerIntervalMs: network.indexerIntervalMs ?? config.INDEXER_INTERVAL_MS,
+    rawEventRetentionDays: config.RAW_EVENT_RETENTION_DAYS ?? config.DATA_RETENTION_DAYS,
     pool: {
       max: config.DATABASE_POOL_MAX,
       acquireTimeoutMs: config.DATABASE_ACQUIRE_TIMEOUT_MS,

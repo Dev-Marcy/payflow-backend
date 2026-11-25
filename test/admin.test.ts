@@ -225,6 +225,7 @@ describe("admin routes", () => {
         ["POST", "/admin/indexer/pause"],
         ["POST", "/admin/indexer/resume"],
         ["POST", "/admin/data/prune"],
+        ["GET", "/admin/data/retention"],
         ["GET", "/admin/audit-logs"],
         ["GET", "/admin/past-due"],
         ["POST", "/admin/db/vacuum"],

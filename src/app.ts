@@ -198,6 +198,8 @@ function healthOf(runtime: NetworkRuntime): HealthResponse {
           corrections: indexer.corrections ?? 0,
           eventsLedger: indexer.eventsLedger ?? 0,
           eventsLag: indexer.eventsLag ?? 0,
+          rawEventRetentionDays: indexer.rawEventRetentionDays ?? null,
+          lastPrunedAt: indexer.lastPrunedAt ?? null,
         }
       : null,
     rpc: rpc && "active" in rpc && Array.isArray(rpc.endpoints) ? { active: rpc.active, endpoints: rpc.endpoints } : null,

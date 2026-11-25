@@ -192,8 +192,10 @@ const adminHooks: AdminHooks = {
     // from the admin endpoint; if absent, use the per-table config defaults.
     const rawEventDays = daysToKeep ?? (config.RAW_EVENT_RETENTION_DAYS ?? config.DATA_RETENTION_DAYS);
     const chargeAttemptDays = config.CHARGE_ATTEMPT_RETENTION_DAYS;
+    // Guard: never prune events the projection has not consumed yet (#246).
+    const cursor = defaultRuntime.indexer.status.cursor;
     try {
-      const events = await pruneOldEvents(db, rawEventDays);
+      const events = await pruneOldEvents(db, rawEventDays, { maxLedger: cursor });
       const chargeAttempts = await pruneChargeAttempts(db, chargeAttemptDays);
       const deleted = { events, chargeAttempts };
       await logAuditEvent(db, {
@@ -211,6 +213,19 @@ const adminHooks: AdminHooks = {
       });
       throw err;
     }
+  },
+  getRetentionPolicy: async () => {
+    const db = defaultRuntime.db;
+    const indexerStatus = defaultRuntime.indexer.status;
+    const rawEventDays = config.RAW_EVENT_RETENTION_DAYS ?? config.DATA_RETENTION_DAYS;
+    const chargeAttemptDays = config.CHARGE_ATTEMPT_RETENTION_DAYS;
+    const countRow = await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM events");
+    return {
+      rawEventRetentionDays: rawEventDays,
+      chargeAttemptRetentionDays: chargeAttemptDays,
+      lastPrunedAt: indexerStatus.lastPrunedAt ?? null,
+      rawEventCount: countRow?.n ?? 0,
+    };
   },
   getAuditLogs: async (limit: number) => {
     const db = defaultRuntime.db;

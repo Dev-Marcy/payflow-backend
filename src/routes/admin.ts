@@ -22,6 +22,11 @@ export interface AdminHooks {
   getAuditLogs?: (limit: number) => unknown;
   getPastDueMandates?: () => unknown;
   vacuumDb?: () => Promise<unknown>;
+  /**
+   * Returns the current raw-event retention policy: how many days events are
+   * kept, when the last automatic prune ran, and how many raw events exist.
+   */
+  getRetentionPolicy?: () => Promise<unknown>;
 }
 
 /** Scoped operation that a token is allowed to perform. */
@@ -198,6 +203,15 @@ export function buildAdminRoutes(token: string | AdminToken[], hooks: AdminHooks
     }
     const daysToKeep = req.query.days !== undefined ? Math.max(0, Number(req.query.days)) : undefined;
     await respond(req, res, "prune_failed", () => prune(daysToKeep));
+  });
+
+  r.get("/data/retention", async (req, res) => {
+    const read = hooks.getRetentionPolicy;
+    if (!read) {
+      sendApiError(res, req, 503, "retention_unavailable", undefined, undefined, 30);
+      return;
+    }
+    await respond(req, res, "retention_failed", read);
   });
 
   r.get("/audit-logs", async (req, res) => {

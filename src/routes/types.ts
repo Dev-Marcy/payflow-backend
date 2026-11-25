@@ -656,6 +656,13 @@ export interface HealthResponse {
     eventsLedger: number;
     /** Ledgers the projection trails the raw event stream by. */
     eventsLag: number;
+    /**
+     * Days raw events are kept before they are pruned. Zero means indefinite.
+     * Null when the indexer has not reported the policy yet.
+     */
+    rawEventRetentionDays: number | null;
+    /** Unix seconds when the last automatic prune completed; null until the first prune. */
+    lastPrunedAt: number | null;
   } | null;
   rpc?: {
     active: string;

@@ -553,14 +553,52 @@ export async function logAuditEvent(db: Storage, entry: AuditLogEntry): Promise<
   ]);
 }
 
-export async function pruneOldEvents(db: Storage, daysToKeep: number = 30): Promise<number> {
+/**
+ * Coordination between pruning and the projection (#246). Raw events are the
+ * source the projection is rebuilt from, so a prune must never remove events
+ * the projection has not consumed yet: `maxLedger` is the projection cursor,
+ * and events at or above it are kept however old they are.
+ */
+export interface PruneOptions {
+  /**
+   * Never prune events at or above this ledger. Pass the projection cursor so
+   * an event that has been retained but not yet projected survives the prune.
+   */
+  maxLedger?: number | undefined;
+}
+
+/**
+ * Delete raw contract events older than `daysToKeep` days.
+ *
+ * A `daysToKeep` of 0 (or a negative value) keeps everything: the documented
+ * meaning of `RAW_EVENT_RETENTION_DAYS=0` is "indefinite retention", so it
+ * must never delete the whole table. Events whose close time is unknown are
+ * kept as well — their ledger position cannot be compared with the cutoff.
+ *
+ * `options.maxLedger` is the projection cursor: events at or above it have
+ * not been projected yet (a backfill in flight, a crashed pass whose cursor
+ * did not advance), so they are never removed, which keeps the prune
+ * coordinated with the projection (#246).
+ */
+export async function pruneOldEvents(
+  db: Storage,
+  daysToKeep: number = 30,
+  options: PruneOptions = {},
+): Promise<number> {
+  if (!Number.isFinite(daysToKeep) || daysToKeep <= 0) return 0;
   const cutoffTime = Math.floor((Date.now() - daysToKeep * 24 * 60 * 60 * 1000) / 1000);
+  const maxLedger = options.maxLedger;
   // `RETURNING` reports the deleted rows on both backends, so the count needs
   // no second statement: node:sqlite's `changes` is not on the Storage boundary.
-  const deleted = await db.all<{ event_id: string }>(
-    "DELETE FROM events WHERE close_time IS NOT NULL AND close_time < ? RETURNING event_id",
-    [cutoffTime],
-  );
+  const deleted = maxLedger === undefined
+    ? await db.all<{ event_id: string }>(
+        "DELETE FROM events WHERE close_time IS NOT NULL AND close_time < ? RETURNING event_id",
+        [cutoffTime],
+      )
+    : await db.all<{ event_id: string }>(
+        "DELETE FROM events WHERE close_time IS NOT NULL AND close_time < ? AND ledger < ? RETURNING event_id",
+        [cutoffTime, maxLedger],
+      );
   return deleted.length;
 }
 
