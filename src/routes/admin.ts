@@ -18,11 +18,19 @@ export interface AdminHooks {
   keeperPass?: () => Promise<unknown>;
   keeperBackoff?: () => unknown;
   keeperHistory?: () => unknown;
+  /** List the due mandates and intended charges without submitting (#250). */
+  keeperDryRun?: () => Promise<unknown>;
   pauseIndexer?: () => unknown;
   resumeIndexer?: () => unknown;
   pruneData?: (daysToKeep?: number) => Promise<unknown>;
   getAuditLogs?: (limit: number) => unknown;
   getPastDueMandates?: () => unknown;
+  vacuumDb?: () => Promise<unknown>;
+  /**
+   * Returns the current raw-event retention policy: how many days events are
+   * kept, when the last automatic prune ran, and how many raw events exist.
+   */
+  getRetentionPolicy?: () => Promise<unknown>;
 }
 
 /** Scoped operation that a token is allowed to perform. */
@@ -165,6 +173,25 @@ export function buildAdminRoutes(token: string | AdminToken[], hooks: AdminHooks
     await respond(req, res, "keeper_pass_failed", run);
   });
 
+  r.get("/keeper/dry-run", queryOnly(), async (req, res) => {
+    const reqWithToken = req as Request & { adminToken?: AdminToken };
+    if (reqWithToken.adminToken && !hasScope(reqWithToken.adminToken, "keeper")) {
+      sendApiError(res, req, 403, "unauthorized", "Insufficient permissions for this operation");
+      return;
+    }
+    const run = hooks.keeperDryRun;
+    if (!run) {
+      sendApiError(res, req, 503, "keeper_unavailable", undefined, undefined, 30);
+      return;
+    }
+    try {
+      res.json({ status: "ok", dry_run: (await run()) ?? null });
+    } catch (err) {
+      logger.error({ err }, "keeper dry run failed");
+      sendApiError(res, req, 500, "keeper_pass_failed", err instanceof Error ? err.message : String(err));
+    }
+  });
+
   r.get("/keeper/backoff", queryOnly(), (req, res) => {
     const reqWithToken = req as Request & { adminToken?: AdminToken };
     if (reqWithToken.adminToken && !hasScope(reqWithToken.adminToken, "keeper")) {
@@ -231,7 +258,16 @@ export function buildAdminRoutes(token: string | AdminToken[], hooks: AdminHooks
     await respond(req, res, "prune_failed", () => prune(daysToKeep));
   });
 
-  r.get("/audit-logs", queryOnly("limit"), async (req, res) => {
+  r.get("/data/retention", async (req, res) => {
+    const read = hooks.getRetentionPolicy;
+    if (!read) {
+      sendApiError(res, req, 503, "retention_unavailable", undefined, undefined, 30);
+      return;
+    }
+    await respond(req, res, "retention_failed", read);
+  });
+
+  r.get("/audit-logs", async (req, res) => {
     const read = hooks.getAuditLogs;
     if (!read) {
       sendApiError(res, req, 503, "audit_unavailable", undefined, undefined, 30);
@@ -250,6 +286,15 @@ export function buildAdminRoutes(token: string | AdminToken[], hooks: AdminHooks
       return;
     }
     res.json({ status: "ok", past_due: (await read()) ?? [] });
+  });
+
+  r.post("/db/vacuum", async (req, res) => {
+    const run = hooks.vacuumDb;
+    if (!run) {
+      sendApiError(res, req, 503, "vacuum_unavailable", undefined, undefined, 30);
+      return;
+    }
+    await respond(req, res, "vacuum_failed", run);
   });
 
   return r;

@@ -10,6 +10,7 @@ import type { DecodedEvent } from "../src/lib/stellar.ts";
 import type { AdminHooks } from "../src/routes/admin.ts";
 import type { WebhookDispatcher } from "../src/lib/webhooks.ts";
 import { Sep10Auth } from "../src/routes/auth.ts";
+import { SqliteStorage } from "../src/lib/store/sqlite.ts";
 import { testAddress } from "./addresses.ts";
 
 /**
@@ -83,6 +84,8 @@ function testAuth(): Sep10Auth {
     networkPassphrase: testnet.networkPassphrase,
     issuer: "https://payflow.test/api/testnet/auth",
     tokenTtlS: 3_600,
+    refreshTtlS: 86_400,
+    db: SqliteStorage.open(":memory:"),
     loadAccount: async () => null,
   });
 }
@@ -607,6 +610,22 @@ describe("request parser failures", () => {
     const body = await assertErrorEnvelope(res, { status: 400, code: "invalid_request" }, "truncated JSON body");
     assert.equal(body.error.message, "The request parameters are not valid.");
     assert.ok(!JSON.stringify(body).includes("GB343X"), "the caller's payload reached the error body");
+  });
+
+  test("reject oversized JSON bodies with 413 without echoing the payload", async () => {
+    const payload = "x".repeat(65_536);
+    const res = await fetch(`${base}/api/v1/auth/rotate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: payload }),
+    });
+    const body = await assertErrorEnvelope(
+      res,
+      { status: 413, code: "payload_too_large" },
+      "oversized JSON body",
+    );
+    assert.equal(body.error.message, "The request body exceeds the allowed size.");
+    assert.ok(!JSON.stringify(body).includes(payload), "the caller's payload reached the error body");
   });
 
   test("the readiness probe is the one documented non-envelope 503", async () => {
