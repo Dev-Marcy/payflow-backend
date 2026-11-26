@@ -44,6 +44,12 @@ and impact. Acknowledgement within 72 hours.
   no read-API route can reach, and no read-API credential (including a SEP-10 JWT)
   is accepted there. Keep `ADMIN_TOKEN` in the host's secret store; rotate it if
   it is ever exposed, without touching `SEP10_SIGNING_KEY` or `SEP10_JWT_SECRET`.
+  Configured admin tokens must be 16–4096 characters; token checks compare
+  fixed-size SHA-256 digests with Node's constant-time primitive.
+- **API inputs are schema-validated.** REST routes reject unsupported or
+  repeated query parameters, malformed path/body values, and invalid JSON with
+  `400 invalid_request` before invoking downstream handlers. Validation errors
+  use the shared error envelope and do not echo request bodies or secrets.
 - **SEP-10 JWTs are short-lived** (`SEP10_JWT_TTL_S`, an hour by default), so a
   leaked JWT's blast radius is small. `POST /api/auth` issues a JWT together
   with a single-use refresh token; `POST /api/auth/rotate` exchanges a refresh

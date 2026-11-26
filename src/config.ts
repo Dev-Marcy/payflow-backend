@@ -106,11 +106,11 @@ export function corsOrigins(raw: string | string[] | undefined): "*" | string[] 
 
 const adminTokensSchema = z.array(
   z.object({
-    token: z.string().min(16, "each admin token needs at least 16 characters"),
+    token: z.string().min(16, "each admin token needs at least 16 characters").max(4_096),
     scopes: z.array(z.enum(["reindex", "keeper", "indexer", "*"])).nonempty().optional(),
     expiresAt: z.number().int().positive().optional(),
-  }),
-);
+  }).strict(),
+).max(100, "at most 100 admin tokens may be configured");
 
 const schema = z.object({
   STELLAR_NETWORK: z.string().default("testnet"),
@@ -411,7 +411,12 @@ const schema = z.object({
     .transform((value) => (value === "" ? undefined : value))
     .refine((value) => value === undefined || isHttpUrl(value) || value.startsWith("redis://") || value.startsWith("rediss://"), "must be a redis(s) URL"),
 
-  ADMIN_TOKEN: z.string().optional(),
+  ADMIN_TOKEN: z
+    .string()
+    .optional()
+    .transform((value) => (value === "" ? undefined : value))
+    .refine((value) => value === undefined || value.length >= 16, "must be at least 16 characters")
+    .refine((value) => value === undefined || value.length <= 4_096, "must be at most 4096 characters"),
   /**
    * Scoped operator tokens, as a JSON array of
    * `{ "token": "...", "scopes": ["reindex" | "keeper" | "indexer" | "*"], "expiresAt": <unix seconds> }`.
