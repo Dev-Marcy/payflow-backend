@@ -223,6 +223,8 @@ CREATE TABLE IF NOT EXISTS webhooks (
   failures    INTEGER NOT NULL DEFAULT 0,
   last_attempt INTEGER,
   last_status INTEGER,
+  circuit_open_until INTEGER,
+  circuit_half_open INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS webhooks_merchant ON webhooks(merchant);
@@ -380,6 +382,8 @@ const ADDED_COLUMNS: ReadonlyArray<[table: string, column: string, decl: string]
   ["mandates", "ended_by", "TEXT"],
   ["webhooks", "previous_secret", "TEXT"],
   ["webhooks", "previous_secret_expires_at", "INTEGER"],
+  ["webhooks", "circuit_open_until", "INTEGER"],
+  ["webhooks", "circuit_half_open", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
 /**
